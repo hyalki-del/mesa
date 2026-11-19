@@ -12,6 +12,7 @@ let masterGainNode = null;
 let analyser = null;
 let meterTimer = null;
 let stream = null;
+let fallbackOsc = null;
 let isBypassed = false;
 
 function setStatus(msg) {
@@ -60,8 +61,17 @@ function startMeter() {
       if (abs > peak) peak = abs;
     }
     const db = peak > 1e-6 ? (20 * Math.log10(peak)).toFixed(1) : "-inf";
-    statusEl.textContent = `Running (${ctx.sampleRate} Hz) | Input Peak: ${db} dBFS | Out: ${masterGainNode?.gain.value ?? 1}`;
+    statusEl.textContent = `Running (${ctx.sampleRate} Hz) | Input Peak: ${db} dBFS`;
   }, 120);
+}
+
+function getUserMediaWithTimeout(constraints, ms = 3000) {
+  return Promise.race([
+    navigator.mediaDevices.getUserMedia(constraints),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Timed out waiting for audio input")), ms)
+    )
+  ]);
 }
 
 async function stopAudio() {
@@ -72,6 +82,11 @@ async function stopAudio() {
   bypassGainNode = null;
   wetGainNode = null;
   masterGainNode = null;
+
+  try {
+    fallbackOsc?.stop();
+  } catch (_) {}
+  fallbackOsc = null;
 
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
@@ -95,7 +110,7 @@ toggleBtn?.addEventListener("click", async () => {
   }
 
   toggleBtn.disabled = true;
-  setStatus("Starting audio...");
+  setStatus("Requesting audio input...");
 
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -106,22 +121,6 @@ toggleBtn?.addEventListener("click", async () => {
 
     const workletUrl = new URL("./dsp/markiv-worklet.js", import.meta.url);
     await ctx.audioWorklet.addModule(workletUrl);
-
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: { ideal: 2 },
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false
-      }
-    });
-
-    const source = ctx.createMediaStreamSource(stream);
-    inputGainNode = ctx.createGain();
-    inputGainNode.gain.value = 5.0;
-
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
 
     worklet = new AudioWorkletNode(ctx, "markiv-worklet", {
       numberOfInputs: 1,
@@ -134,15 +133,48 @@ toggleBtn?.addEventListener("click", async () => {
       setStatus("Worklet error — check Console");
     };
 
+    inputGainNode = ctx.createGain();
+    inputGainNode.gain.value = 5.0;
+
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+
     wetGainNode = ctx.createGain();
     bypassGainNode = ctx.createGain();
     masterGainNode = ctx.createGain();
     masterGainNode.gain.value = 1.0;
 
-    // Route both wet (worklet) and clean bypass into masterGain -> destination
-    source.connect(inputGainNode);
-    inputGainNode.connect(analyser);
+    let inputConnected = false;
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        stream = await getUserMediaWithTimeout({
+          audio: {
+            channelCount: { ideal: 2 },
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+        const micSource = ctx.createMediaStreamSource(stream);
+        micSource.connect(inputGainNode);
+        inputConnected = true;
+      } catch (micErr) {
+        console.warn("[MarkIV] Mic fallback to test tone:", micErr);
+      }
+    }
 
+    if (!inputConnected) {
+      fallbackOsc = ctx.createOscillator();
+      const testGain = ctx.createGain();
+      fallbackOsc.type = "sawtooth";
+      fallbackOsc.frequency.value = 110;
+      testGain.gain.value = 0.05;
+      fallbackOsc.connect(testGain);
+      testGain.connect(inputGainNode);
+      fallbackOsc.start();
+    }
+
+    inputGainNode.connect(analyser);
     inputGainNode.connect(worklet);
     worklet.connect(wetGainNode);
     wetGainNode.connect(masterGainNode);
