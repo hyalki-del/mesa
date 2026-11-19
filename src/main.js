@@ -5,17 +5,38 @@ const toggleBtn = document.getElementById("toggle-audio");
 
 let ctx = null;
 let worklet = null;
+let inputGainNode = null;
+let bypassGainNode = null;
+let wetGainNode = null;
+let analyser = null;
+let meterTimer = null;
 let stream = null;
-let fallbackOsc = null;
+let isBypassed = false;
 
 function setStatus(msg) {
   console.log("[MarkIV]", msg);
   if (statusEl) statusEl.textContent = msg;
 }
 
+function updateRouting() {
+  if (!ctx || !bypassGainNode || !wetGainNode) return;
+  const now = ctx.currentTime;
+  bypassGainNode.gain.setTargetAtTime(isBypassed ? 0.6 : 0.0, now, 0.015);
+  wetGainNode.gain.setTargetAtTime(isBypassed ? 0.0 : 1.0, now, 0.015);
+}
+
 function applyParam(name, value) {
-  if (!ctx || !worklet) return;
-  const param = worklet.parameters.get(name);
+  if (!ctx) return;
+  if (name === "inputBoost") {
+    inputGainNode?.gain.setTargetAtTime(value, ctx.currentTime, 0.015);
+    return;
+  }
+  if (name === "bypass") {
+    isBypassed = Boolean(value);
+    updateRouting();
+    return;
+  }
+  const param = worklet?.parameters.get(name);
   if (param) {
     param.setTargetAtTime(value, ctx.currentTime, 0.015);
   }
@@ -25,11 +46,30 @@ initControls((name, value) => {
   applyParam(name, value);
 });
 
+function startMeter() {
+  clearInterval(meterTimer);
+  if (!analyser) return;
+  const data = new Float32Array(analyser.fftSize);
+  meterTimer = setInterval(() => {
+    if (!analyser || !statusEl || !ctx || ctx.state !== "running") return;
+    analyser.getFloatTimeDomainData(data);
+    let peak = 0;
+    for (let i = 0; i < data.length; i++) {
+      const abs = Math.abs(data[i]);
+      if (abs > peak) peak = abs;
+    }
+    const db = peak > 1e-6 ? (20 * Math.log10(peak)).toFixed(1) : "-inf";
+    statusEl.textContent = `Running (${ctx.sampleRate} Hz) | Input Peak: ${db} dBFS`;
+  }, 120);
+}
+
 async function stopAudio() {
-  try {
-    fallbackOsc?.stop();
-  } catch (_) {}
-  fallbackOsc = null;
+  clearInterval(meterTimer);
+  meterTimer = null;
+  analyser = null;
+  inputGainNode = null;
+  bypassGainNode = null;
+  wetGainNode = null;
 
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
@@ -53,14 +93,10 @@ toggleBtn?.addEventListener("click", async () => {
   }
 
   toggleBtn.disabled = true;
-  setStatus("Starting audio...");
+  setStatus("Requesting audio input...");
 
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) {
-      throw new Error("Web Audio API not supported in this browser.");
-    }
-
     ctx = new AudioCtx({ latencyHint: "interactive" });
     if (ctx.state === "suspended") {
       await ctx.resume();
@@ -69,53 +105,49 @@ toggleBtn?.addEventListener("click", async () => {
     const workletUrl = new URL("./dsp/markiv-worklet.js", import.meta.url);
     await ctx.audioWorklet.addModule(workletUrl);
 
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: { ideal: 2 },
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    });
+
+    const source = ctx.createMediaStreamSource(stream);
+    inputGainNode = ctx.createGain();
+    inputGainNode.gain.value = 4.0; // Helpful boost for passive guitar pickups
+
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+
     worklet = new AudioWorkletNode(ctx, "markiv-worklet", {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [1]
     });
 
-    let inputConnected = false;
-    if (navigator.mediaDevices?.getUserMedia) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false
-          }
-        });
-        const micSource = ctx.createMediaStreamSource(stream);
-        micSource.connect(worklet);
-        inputConnected = true;
-      } catch (micErr) {
-        console.warn("[MarkIV] Mic unavailable, using test tone:", micErr);
-      }
-    }
+    wetGainNode = ctx.createGain();
+    bypassGainNode = ctx.createGain();
 
-    if (!inputConnected) {
-      // Low test signal so you can verify DSP & EQ without a physical mic/interface
-      fallbackOsc = ctx.createOscillator();
-      const testGain = ctx.createGain();
-      fallbackOsc.type = "sawtooth";
-      fallbackOsc.frequency.value = 110; // A2 guitar-range test tone
-      testGain.gain.value = 0.05;
-      fallbackOsc.connect(testGain);
-      testGain.connect(worklet);
-      fallbackOsc.start();
-    }
+    // Signal chain: mic/interface -> inputGain -> analyser -> [worklet -> wetGain] & [bypassGain] -> destination
+    source.connect(inputGainNode);
+    inputGainNode.connect(analyser);
 
-    worklet.connect(ctx.destination);
+    inputGainNode.connect(worklet);
+    worklet.connect(wetGainNode);
+    wetGainNode.connect(ctx.destination);
+
+    inputGainNode.connect(bypassGainNode);
+    bypassGainNode.connect(ctx.destination);
+
+    updateRouting();
 
     const gainVal = parseFloat(document.getElementById("gain")?.value ?? "0.5");
     applyParam("gain", gainVal);
 
     toggleBtn.textContent = "Stop Audio";
-    setStatus(
-      inputConnected
-        ? `Running (Mic/DI @ ${ctx.sampleRate} Hz)`
-        : `Running (110Hz Test Tone @ ${ctx.sampleRate} Hz)`
-    );
+    startMeter();
   } catch (err) {
     console.error("[MarkIV] Start failed:", err);
     setStatus(`Error: ${err.message || err}`);
