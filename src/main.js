@@ -170,7 +170,6 @@ toggleBtn?.addEventListener("click", async () => {
     wetGainNode.connect(ctx.destination);
     bypassGainNode.connect(ctx.destination);
 
-    // Push current UI values into worklet parameters
     document.querySelectorAll('input[type="range"]').forEach((el) => {
       applyParam(el.id, parseFloat(el.value));
     });
