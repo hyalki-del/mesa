@@ -8,6 +8,7 @@ let worklet = null;
 let inputGainNode = null;
 let bypassGainNode = null;
 let wetGainNode = null;
+let masterGainNode = null;
 let analyser = null;
 let meterTimer = null;
 let stream = null;
@@ -21,7 +22,7 @@ function setStatus(msg) {
 function updateRouting() {
   if (!ctx || !bypassGainNode || !wetGainNode) return;
   const now = ctx.currentTime;
-  bypassGainNode.gain.setTargetAtTime(isBypassed ? 0.6 : 0.0, now, 0.015);
+  bypassGainNode.gain.setTargetAtTime(isBypassed ? 0.8 : 0.0, now, 0.015);
   wetGainNode.gain.setTargetAtTime(isBypassed ? 0.0 : 1.0, now, 0.015);
 }
 
@@ -59,7 +60,7 @@ function startMeter() {
       if (abs > peak) peak = abs;
     }
     const db = peak > 1e-6 ? (20 * Math.log10(peak)).toFixed(1) : "-inf";
-    statusEl.textContent = `Running (${ctx.sampleRate} Hz) | Input Peak: ${db} dBFS`;
+    statusEl.textContent = `Running (${ctx.sampleRate} Hz) | Input Peak: ${db} dBFS | Out: ${masterGainNode?.gain.value ?? 1}`;
   }, 120);
 }
 
@@ -70,6 +71,7 @@ async function stopAudio() {
   inputGainNode = null;
   bypassGainNode = null;
   wetGainNode = null;
+  masterGainNode = null;
 
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
@@ -93,7 +95,7 @@ toggleBtn?.addEventListener("click", async () => {
   }
 
   toggleBtn.disabled = true;
-  setStatus("Requesting audio input...");
+  setStatus("Starting audio...");
 
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -116,7 +118,7 @@ toggleBtn?.addEventListener("click", async () => {
 
     const source = ctx.createMediaStreamSource(stream);
     inputGainNode = ctx.createGain();
-    inputGainNode.gain.value = 4.0; // Helpful boost for passive guitar pickups
+    inputGainNode.gain.value = 5.0;
 
     analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
@@ -127,19 +129,28 @@ toggleBtn?.addEventListener("click", async () => {
       outputChannelCount: [1]
     });
 
+    worklet.onprocessorerror = (e) => {
+      console.error("[MarkIV] Worklet processor error:", e);
+      setStatus("Worklet error — check Console");
+    };
+
     wetGainNode = ctx.createGain();
     bypassGainNode = ctx.createGain();
+    masterGainNode = ctx.createGain();
+    masterGainNode.gain.value = 1.0;
 
-    // Signal chain: mic/interface -> inputGain -> analyser -> [worklet -> wetGain] & [bypassGain] -> destination
+    // Route both wet (worklet) and clean bypass into masterGain -> destination
     source.connect(inputGainNode);
     inputGainNode.connect(analyser);
 
     inputGainNode.connect(worklet);
     worklet.connect(wetGainNode);
-    wetGainNode.connect(ctx.destination);
+    wetGainNode.connect(masterGainNode);
 
     inputGainNode.connect(bypassGainNode);
-    bypassGainNode.connect(ctx.destination);
+    bypassGainNode.connect(masterGainNode);
+
+    masterGainNode.connect(ctx.destination);
 
     updateRouting();
 
