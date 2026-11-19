@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mark IV Web Amp</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <h1>Mesa Mark IV Web Preamp &amp; EQ</h1>
+      <div class="transport">
+        <button id="toggle-audio" type="button">Start Audio</button>
+        <span id="status">Idle (HTTPS required for mic/input)</span>
+      </div>
+
+      <section class="controls">
+        <label>
+          <span>Gain</span>
+          <input id="gain" type="range" min="0" max="1" step="0.01" value="0.5" />
+          <output id="gain-val">0.50</output>
+        </label>
+      </section>
+
+      <section class="eq-section">
+        <h2>Graphic EQ</h2>
+        <div class="eq-grid" id="eq-grid"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
