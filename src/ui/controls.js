@@ -1,50 +1,57 @@
-const EQ_BANDS = [
-  { id: "eq80", label: "80 Hz", freq: 80 },
-  { id: "eq240", label: "240 Hz", freq: 240 },
-  { id: "eq750", label: "750 Hz", freq: 750 },
-  { id: "eq2200", label: "2.2 kHz", freq: 2200 },
-  { id: "eq6600", label: "6.6 kHz", freq: 6600 }
-];
-
-export function initControls(onParamChange) {
-  const gainInput = document.getElementById("gain");
-  const gainOut = document.getElementById("gain-val");
-  const eqGrid = document.getElementById("eq-grid");
-
-  gainInput?.addEventListener("input", () => {
-    const val = parseFloat(gainInput.value);
-    if (gainOut) gainOut.textContent = val.toFixed(2);
-    onParamChange?.("gain", val);
+export function initControls(onChange) {
+  const ranges = document.querySelectorAll('input[type="range"]');
+  ranges.forEach((input) => {
+    const label = document.querySelector(`.val[data-for="${input.id}"]`);
+    const updateLabel = () => {
+      const num = parseFloat(input.value);
+      if (label) {
+        label.textContent = input.id.startsWith("eq")
+          ? `${num > 0 ? "+" : ""}${num.toFixed(1)} dB`
+          : num.toFixed(1);
+      }
+      onChange(input.id, num);
+    };
+    input.addEventListener("input", updateLabel);
+    updateLabel();
   });
 
-  if (eqGrid) {
-    eqGrid.innerHTML = "";
-    for (const band of EQ_BANDS) {
-      const wrap = document.createElement("div");
-      wrap.className = "eq-band";
+  const chButtons = document.querySelectorAll(".ch-btn");
+  const ledRhy1 = document.getElementById("led-rhy1");
+  const ledLead2 = document.getElementById("led-lead2");
+  const ledLead3 = document.getElementById("led-lead3");
 
-      const title = document.createElement("span");
-      title.textContent = band.label;
+  chButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const ch = parseInt(btn.dataset.channel, 10);
+      chButtons.forEach((b) => b.classList.toggle("active", b === btn));
+      ledRhy1?.classList.toggle("on", ch === 0);
+      ledLead2?.classList.toggle("on", ch === 1);
+      ledLead3?.classList.toggle("on", ch === 2);
+      onChange("channel", ch);
+    });
+  });
 
-      const slider = document.createElement("input");
-      slider.type = "range";
-      slider.min = "-1";
-      slider.max = "1";
-      slider.step = "0.02";
-      slider.value = "0";
-      slider.id = band.id;
-
-      const readOut = document.createElement("output");
-      readOut.textContent = "0.00";
-
-      slider.addEventListener("input", () => {
-        const val = parseFloat(slider.value);
-        readOut.textContent = val.toFixed(2);
-        onParamChange?.(band.id, val);
-      });
-
-      wrap.append(title, slider, readOut);
-      eqGrid.appendChild(wrap);
-    }
+  function bindToggle(id, paramName, onText, offText, initial = true, ledId = null) {
+    const btn = document.getElementById(id);
+    const led = ledId ? document.getElementById(ledId) : null;
+    let state = initial;
+    const sync = () => {
+      if (btn) {
+        btn.textContent = state ? onText : offText;
+        btn.classList.toggle("active", state);
+      }
+      if (led) led.classList.toggle("on", state);
+      onChange(paramName, state ? 1 : 0);
+    };
+    btn?.addEventListener("click", () => {
+      state = !state;
+      sync();
+    });
+    sync();
   }
+
+  bindToggle("eq-toggle", "eqOn", "EQ: ON", "EQ: OFF", true);
+  bindToggle("solo-toggle", "soloOn", "SOLO: ON", "SOLO: OFF", false);
+  bindToggle("standby-toggle", "standbyOn", "STANDBY: ON", "STANDBY: OFF", true, "led-standby");
+  bindToggle("power-toggle", "powerOn", "POWER: ON", "POWER: OFF", true, "led-power");
 }
