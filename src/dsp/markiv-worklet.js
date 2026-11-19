@@ -72,7 +72,7 @@ function triodeStage(x, drive, asym = 0.14) {
   return Math.tanh(u) - 0.12 * Math.tanh(2.4 * u);
 }
 
-class MarkIVWorklet extends AudioProcessor {
+class MarkIVWorklet extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     const knob = (name, def) => ({
       name, defaultValue: def, minValue: 0, maxValue: 10, automationRate: "k-rate"
