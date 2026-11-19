@@ -1,33 +1,321 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mark IV Web Amp</title>
-    <link rel="stylesheet" href="./styles.css" />
-  </head>
-  <body>
-    <main class="panel">
-      <h1>Mesa Mark IV Web Preamp &amp; EQ</h1>
-      <div class="transport">
-        <button id="toggle-audio" type="button">Start Audio</button>
-        <span id="status">Idle (HTTPS required for mic/input)</span>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mark IV Preamp Simulator</title>
+  <style>
+    :root {
+      --panel: #141518;
+      --panel-2: #1d1f24;
+      --border: #343842;
+      --text: #eef1f6;
+      --muted: #9aa3b2;
+      --accent: #e0a12b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #0b0c0e;
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    button {
+      background: #252932;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.active {
+      background: var(--accent);
+      color: #111;
+      border-color: var(--accent);
+    }
+    #status { color: var(--muted); font-size: 0.9rem; }
+    .chassis {
+      background: linear-gradient(180deg, #1b1d22 0%, var(--panel) 100%);
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .section {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .section-title {
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    .controls-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(115px, 1fr));
+      gap: 10px;
+    }
+    .knob-box {
+      background: var(--panel-2);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .knob-box label {
+      font-size: 0.72rem;
+      line-height: 1.2;
+      color: var(--text);
+      font-weight: 600;
+    }
+    .knob-box .val {
+      font-size: 0.75rem;
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+    input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+    .channel-row, .led-row, .switch-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .led {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #2b2e36;
+      border: 1px solid #000;
+    }
+    .led.rhy1.on { background: #f5d327; box-shadow: 0 0 8px #f5d327; }
+    .led.lead2.on { background: #ff9914; box-shadow: 0 0 8px #ff9914; }
+    .led.lead3.on { background: #ff3333; box-shadow: 0 0 8px #ff3333; }
+    .led.red.on { background: #ff3b30; box-shadow: 0 0 8px #ff3b30; }
+    .eq-sliders {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      align-items: end;
+    }
+    .eq-band {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      background: var(--panel-2);
+      padding: 8px 4px;
+      border-radius: 6px;
+    }
+    .eq-band input[type="range"].vertical {
+      writing-mode: vertical-lr;
+      direction: rtl;
+      width: 24px;
+      height: 110px;
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <button id="toggle-audio" type="button">Start Audio</button>
+    <button id="bypass-btn" type="button">Bypass: OFF</button>
+    <span id="status">Idle</span>
+  </div>
+
+  <div class="chassis">
+    <div class="section">
+      <div class="section-title">Input &amp; Gains</div>
+      <div class="controls-grid">
+        <div class="knob-box">
+          <label for="inputGainRhy">INPUT GAIN (RHYTHM)</label>
+          <input id="inputGainRhy" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="inputGainRhy">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="rhy1Gain">RHY 1 GAIN</label>
+          <input id="rhy1Gain" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="rhy1Gain">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="lead2Gain">LEAD 2 GAIN</label>
+          <input id="lead2Gain" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="lead2Gain">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="lead3Gain">LEAD 3 GAIN</label>
+          <input id="lead3Gain" type="range" min="0" max="10" step="0.1" value="6" />
+          <span class="val" data-for="lead3Gain">6.0</span>
+        </div>
       </div>
 
-      <section class="controls">
-        <label>
-          <span>Gain</span>
-          <input id="gain" type="range" min="0" max="1" step="0.01" value="0.5" />
-          <output id="gain-val">0.50</output>
-        </label>
-      </section>
+      <div class="channel-row">
+        <span class="section-title" style="margin:0;">Channel:</span>
+        <button type="button" class="ch-btn active" data-channel="0">RHY 1</button>
+        <button type="button" class="ch-btn" data-channel="1">LEAD 2</button>
+        <button type="button" class="ch-btn" data-channel="2">LEAD 3</button>
+      </div>
+    </div>
 
-      <section class="eq-section">
-        <h2>Graphic EQ</h2>
-        <div class="eq-grid" id="eq-grid"></div>
-      </section>
-    </main>
+    <div class="section">
+      <div class="section-title">Tone &amp; Presence (R1 / L2 Shared &amp; L3)</div>
+      <div class="controls-grid">
+        <div class="knob-box">
+          <label for="r1L2Treble">R1 TREBLE / L2 TREBLE</label>
+          <input id="r1L2Treble" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="r1L2Treble">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="l3Treble">L3 TREBLE</label>
+          <input id="l3Treble" type="range" min="0" max="10" step="0.1" value="5.5" />
+          <span class="val" data-for="l3Treble">5.5</span>
+        </div>
+        <div class="knob-box">
+          <label for="r1L2Bass">R1+L2 BASS / L2+L3 BASS</label>
+          <input id="r1L2Bass" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="r1L2Bass">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="l3Bass">L3 BASS</label>
+          <input id="l3Bass" type="range" min="0" max="10" step="0.1" value="4.5" />
+          <span class="val" data-for="l3Bass">4.5</span>
+        </div>
+        <div class="knob-box">
+          <label for="r1L2Mid">R1+L2 MID / L2+L3 MID</label>
+          <input id="r1L2Mid" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="r1L2Mid">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="l3Mid">L3 MID</label>
+          <input id="l3Mid" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="l3Mid">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="r1L2Pres">R1+L2 PRES / L2+L3 PRES</label>
+          <input id="r1L2Pres" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="r1L2Pres">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="l3Pres">L3 PRES</label>
+          <input id="l3Pres" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="l3Pres">5.0</span>
+        </div>
+      </div>
+    </div>
 
-    <script type="module" src="./src/main.js"></script>
-  </body>
+    <div class="section">
+      <div class="section-title">Masters &amp; Global Voicing</div>
+      <div class="controls-grid">
+        <div class="knob-box">
+          <label for="rhy1Master">RHY 1 MASTER</label>
+          <input id="rhy1Master" type="range" min="0" max="10" step="0.1" value="6" />
+          <span class="val" data-for="rhy1Master">6.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="lead2Master">LEAD 2 MASTER</label>
+          <input id="lead2Master" type="range" min="0" max="10" step="0.1" value="6" />
+          <span class="val" data-for="lead2Master">6.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="lead3Master">LEAD 3 MASTER</label>
+          <input id="lead3Master" type="range" min="0" max="10" step="0.1" value="6" />
+          <span class="val" data-for="lead3Master">6.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="presence">PRESENCE</label>
+          <input id="presence" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="presence">5.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="reverb">REVERB</label>
+          <input id="reverb" type="range" min="0" max="10" step="0.1" value="2" />
+          <span class="val" data-for="reverb">2.0</span>
+        </div>
+        <div class="knob-box">
+          <label for="dynamics">DYNAMICS</label>
+          <input id="dynamics" type="range" min="0" max="10" step="0.1" value="5" />
+          <span class="val" data-for="dynamics">5.0</span>
+        </div>
+      </div>
+
+      <div class="led-row">
+        <span class="led rhy1 on" id="led-rhy1" title="RHY 1"></span>
+        <span class="led lead2" id="led-lead2" title="LEAD 2"></span>
+        <span class="led lead3" id="led-lead3" title="LEAD 3"></span>
+        <span class="led red on" id="led-standby" title="STANDBY"></span>
+        <span class="led red on" id="led-power" title="POWER"></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">5-Band Graphic EQ</div>
+      <div class="eq-sliders">
+        <div class="eq-band">
+          <span class="val" data-for="eq80">0 dB</span>
+          <input id="eq80" class="vertical" type="range" min="-12" max="12" step="0.5" value="0" />
+          <label for="eq80">80</label>
+        </div>
+        <div class="eq-band">
+          <span class="val" data-for="eq240">0 dB</span>
+          <input id="eq240" class="vertical" type="range" min="-12" max="12" step="0.5" value="0" />
+          <label for="eq240">240</label>
+        </div>
+        <div class="eq-band">
+          <span class="val" data-for="eq750">0 dB</span>
+          <input id="eq750" class="vertical" type="range" min="-12" max="12" step="0.5" value="0" />
+          <label for="eq750">750</label>
+        </div>
+        <div class="eq-band">
+          <span class="val" data-for="eq2200">0 dB</span>
+          <input id="eq2200" class="vertical" type="range" min="-12" max="12" step="0.5" value="0" />
+          <label for="eq2200">2200</label>
+        </div>
+        <div class="eq-band">
+          <span class="val" data-for="eq6600">0 dB</span>
+          <input id="eq6600" class="vertical" type="range" min="-12" max="12" step="0.5" value="0" />
+          <label for="eq6600">6600</label>
+        </div>
+      </div>
+
+      <div class="switch-row">
+        <button id="eq-toggle" type="button" class="active">EQ: ON</button>
+        <button id="solo-toggle" type="button">SOLO: OFF</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Output &amp; Power</div>
+      <div class="controls-grid">
+        <div class="knob-box">
+          <label for="outputLevel">OUTPUT LEVEL</label>
+          <input id="outputLevel" type="range" min="0" max="10" step="0.1" value="6" />
+          <span class="val" data-for="outputLevel">6.0</span>
+        </div>
+      </div>
+      <div class="switch-row">
+        <button id="standby-toggle" type="button" class="active">STANDBY: ON</button>
+        <button id="power-toggle" type="button" class="active">POWER: ON</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
 </html>
