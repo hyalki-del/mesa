@@ -52,6 +52,7 @@ export function initControls(onChange) {
 
   bindToggle("eq-toggle", "eqOn", "EQ: ON", "EQ: OFF", true);
   bindToggle("solo-toggle", "soloOn", "SOLO: ON", "SOLO: OFF", false);
+  bindToggle("cab-toggle", "cabOn", "CAB: ON", "CAB: OFF", true);
   bindToggle("standby-toggle", "standbyOn", "STANDBY: ON", "STANDBY: OFF", true, "led-standby");
   bindToggle("power-toggle", "powerOn", "POWER: ON", "POWER: OFF", true, "led-power");
 }
