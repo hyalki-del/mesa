@@ -1,5 +1,3 @@
-import { triodeStage } from "./nonlinear.js";
-
 const EQ_FREQS = {
   eq80: 80,
   eq240: 240,
@@ -8,10 +6,19 @@ const EQ_FREQS = {
   eq6600: 6600
 };
 
+function triodeStage(x, drive = 1.0, bias = 0.06) {
+  const u = x * drive + bias;
+  const pos = Math.tanh(u * 1.4);
+  const neg = Math.tanh(u * 1.05);
+  const y = u >= 0 ? pos : neg;
+  const dcOffset = Math.tanh(bias * 1.2);
+  return y - dcOffset;
+}
+
 class BiquadPeaking {
-  constructor(freq, sampleRate, q = 1.4) {
+  constructor(freq, sr, q = 1.4) {
     this.freq = freq;
-    this.sampleRate = sampleRate;
+    this.sampleRate = sr;
     this.q = q;
     this.gainDb = null;
     this.b0 = 1;
@@ -92,13 +99,12 @@ class MarkIVWorkletProcessor extends AudioWorkletProcessor {
   process(inputs, outputs, parameters) {
     const input = inputs[0];
     const output = outputs[0];
-    if (!input || !input[0] || !output || !output[0]) return true;
+    if (!output || !output[0]) return true;
 
-    const inCh = input[0];
     const outCh = output[0];
+    const inCh = input && input[0] ? input[0] : null;
     const gainParam = parameters.gain;
 
-    // Map [-1, 1] slider positions to [-12 dB, +12 dB] per block
     for (const key of Object.keys(this.eqFilters)) {
       const pVal = parameters[key]?.[0] ?? 0;
       this.eqFilters[key].updateGain(pVal * 12.0);
@@ -110,10 +116,11 @@ class MarkIVWorkletProcessor extends AudioWorkletProcessor {
     const f2200 = this.eqFilters.eq2200;
     const f6600 = this.eqFilters.eq6600;
 
-    for (let i = 0; i < inCh.length; i++) {
+    for (let i = 0; i < outCh.length; i++) {
+      const sampleIn = inCh ? inCh[i] : 0;
       const g = gainParam.length > 1 ? gainParam[i] : gainParam[0];
       const drive = 1.0 + g * 8.0;
-      const s1 = triodeStage(inCh[i], drive, 0.06);
+      const s1 = triodeStage(sampleIn, drive, 0.06);
       const s2 = triodeStage(s1, 1.0 + g * 4.0, -0.04);
 
       let eqSig = f80.process(s2);
