@@ -2,13 +2,12 @@ import { initControls } from "./ui/controls.js";
 
 const statusEl = document.getElementById("status");
 const toggleBtn = document.getElementById("toggle-audio");
+const bypassBtn = document.getElementById("bypass-btn");
 
 let ctx = null;
 let worklet = null;
-let inputGainNode = null;
 let bypassGainNode = null;
 let wetGainNode = null;
-let masterGainNode = null;
 let analyser = null;
 let meterTimer = null;
 let stream = null;
@@ -29,10 +28,6 @@ function updateRouting() {
 
 function applyParam(name, value) {
   if (!ctx) return;
-  if (name === "inputBoost") {
-    inputGainNode?.gain.setTargetAtTime(value, ctx.currentTime, 0.015);
-    return;
-  }
   if (name === "bypass") {
     isBypassed = Boolean(value);
     updateRouting();
@@ -43,6 +38,13 @@ function applyParam(name, value) {
     param.setTargetAtTime(value, ctx.currentTime, 0.015);
   }
 }
+
+bypassBtn?.addEventListener("click", () => {
+  isBypassed = !isBypassed;
+  bypassBtn.textContent = isBypassed ? "Bypass: ON" : "Bypass: OFF";
+  bypassBtn.classList.toggle("active", isBypassed);
+  updateRouting();
+});
 
 initControls((name, value) => {
   applyParam(name, value);
@@ -78,10 +80,8 @@ async function stopAudio() {
   clearInterval(meterTimer);
   meterTimer = null;
   analyser = null;
-  inputGainNode = null;
   bypassGainNode = null;
   wetGainNode = null;
-  masterGainNode = null;
 
   try {
     fallbackOsc?.stop();
@@ -103,7 +103,6 @@ async function stopAudio() {
 
 toggleBtn?.addEventListener("click", async () => {
   if (!toggleBtn) return;
-
   if (ctx) {
     await stopAudio();
     return;
@@ -128,21 +127,10 @@ toggleBtn?.addEventListener("click", async () => {
       outputChannelCount: [1]
     });
 
-    worklet.onprocessorerror = (e) => {
-      console.error("[MarkIV] Worklet processor error:", e);
-      setStatus("Worklet error — check Console");
-    };
-
-    inputGainNode = ctx.createGain();
-    inputGainNode.gain.value = 5.0;
-
     analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
-
     wetGainNode = ctx.createGain();
     bypassGainNode = ctx.createGain();
-    masterGainNode = ctx.createGain();
-    masterGainNode.gain.value = 1.0;
 
     let inputConnected = false;
     if (navigator.mediaDevices?.getUserMedia) {
@@ -156,7 +144,9 @@ toggleBtn?.addEventListener("click", async () => {
           }
         });
         const micSource = ctx.createMediaStreamSource(stream);
-        micSource.connect(inputGainNode);
+        micSource.connect(analyser);
+        micSource.connect(worklet);
+        micSource.connect(bypassGainNode);
         inputConnected = true;
       } catch (micErr) {
         console.warn("[MarkIV] Mic fallback to test tone:", micErr);
@@ -170,24 +160,24 @@ toggleBtn?.addEventListener("click", async () => {
       fallbackOsc.frequency.value = 110;
       testGain.gain.value = 0.05;
       fallbackOsc.connect(testGain);
-      testGain.connect(inputGainNode);
+      testGain.connect(analyser);
+      testGain.connect(worklet);
+      testGain.connect(bypassGainNode);
       fallbackOsc.start();
     }
 
-    inputGainNode.connect(analyser);
-    inputGainNode.connect(worklet);
     worklet.connect(wetGainNode);
-    wetGainNode.connect(masterGainNode);
+    wetGainNode.connect(ctx.destination);
+    bypassGainNode.connect(ctx.destination);
 
-    inputGainNode.connect(bypassGainNode);
-    bypassGainNode.connect(masterGainNode);
-
-    masterGainNode.connect(ctx.destination);
-
+    // Push current UI values into worklet parameters
+    document.querySelectorAll('input[type="range"]').forEach((el) => {
+      applyParam(el.id, parseFloat(el.value));
+    });
+    document.querySelectorAll(".ch-btn.active").forEach((btn) => {
+      applyParam("channel", parseInt(btn.dataset.channel, 10));
+    });
     updateRouting();
-
-    const gainVal = parseFloat(document.getElementById("gain")?.value ?? "0.5");
-    applyParam("gain", gainVal);
 
     toggleBtn.textContent = "Stop Audio";
     startMeter();
