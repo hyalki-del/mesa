@@ -7,6 +7,26 @@ class Biquad {
     this.z1 = 0; this.z2 = 0;
   }
 
+  setHighPass(freq, q, sr) {
+    const w0 = (2 * Math.PI * freq) / sr;
+    const cosw0 = Math.cos(w0);
+    const sinw0 = Math.sin(w0);
+    const alpha = sinw0 / (2 * q);
+
+    const b0 = (1 + cosw0) * 0.5;
+    const b1 = -(1 + cosw0);
+    const b2 = (1 + cosw0) * 0.5;
+    const a0 = 1 + alpha;
+    const a1 = -2 * cosw0;
+    const a2 = 1 - alpha;
+
+    this.b0 = b0 / a0;
+    this.b1 = b1 / a0;
+    this.b2 = b2 / a0;
+    this.a1 = a1 / a0;
+    this.a2 = a2 / a0;
+  }
+
   setPeaking(freq, q, gainDb, sr) {
     const A = Math.pow(10, gainDb / 40);
     const w0 = (2 * Math.PI * freq) / sr;
@@ -87,10 +107,13 @@ class DcBlocker {
   }
 }
 
-function triodeStage(x, drive, asym = 0.14) {
-  const driven = x * drive;
-  const u = driven + asym * driven * driven;
-  return Math.tanh(u) - 0.1 * Math.tanh(2.2 * u);
+/**
+ * Asymmetric 12AX7 triode stage model:
+ * y = tanh(k1 * u + k2 * u^2 - bias) + bias
+ */
+function triodeStage(u, k1, k2 = 0.16, bias = 0.04) {
+  const z = k1 * u + k2 * u * u - bias;
+  return Math.tanh(z) + bias;
 }
 
 class MarkIVWorklet extends AudioWorkletProcessor {
@@ -141,24 +164,44 @@ class MarkIVWorklet extends AudioWorkletProcessor {
 
   constructor() {
     super();
+    const sr = sampleRate;
+
+    // Inter-stage coupling high-pass & cathode bypass shelves (V1A, V1B, V2A)
+    this.v1aCouplingHpf = new Biquad();
+    this.v1aCathodeShelf = new Biquad();
+    this.v1bCouplingHpf = new Biquad();
+    this.v1bCathodeShelf = new Biquad();
+    this.v2aCouplingHpf = new Biquad();
+    this.v2aCathodeShelf = new Biquad();
+
+    this.v1aCouplingHpf.setHighPass(34, 0.707, sr);
+    this.v1bCouplingHpf.setHighPass(48, 0.707, sr);
+    this.v2aCouplingHpf.setHighPass(56, 0.707, sr);
+
+    // Tone stack & presence
     this.bassFilter = new Biquad();
     this.midFilter = new Biquad();
     this.trebleFilter = new Biquad();
     this.presenceFilter = new Biquad();
+
+    // 5-band graphic EQ
     this.eqBands = [new Biquad(), new Biquad(), new Biquad(), new Biquad(), new Biquad()];
     this.eqFreqs = [80, 240, 750, 2200, 6600];
-    this.dcBlocker = new DcBlocker(18, sampleRate);
+
+    // DC blockers after nonlinear stages
+    this.dcV1a = new DcBlocker(16, sr);
+    this.dcLead = new DcBlocker(18, sr);
 
     // 4x12 Celestion Vintage 30 cabinet voicing filters
     this.cabFilters = [
-      new Biquad(), // 0: Low-end tightness / resonance (~115 Hz)
-      new Biquad(), // 1: Low-mid body (~520 Hz)
-      new Biquad(), // 2: V30 upper-mid contour (~2.7 kHz)
-      new Biquad()  // 3: Speaker top-end roll-off (~5.4 kHz)
+      new Biquad(),
+      new Biquad(),
+      new Biquad(),
+      new Biquad()
     ];
-    this.updateCabFilters(sampleRate);
+    this.updateCabFilters(sr);
 
-    const sr = sampleRate;
+    // Damped multi-tap reverb
     this.revDelays = [
       new Float32Array(Math.max(1, Math.floor(0.029 * sr))),
       new Float32Array(Math.max(1, Math.floor(0.037 * sr))),
@@ -167,8 +210,10 @@ class MarkIVWorklet extends AudioWorkletProcessor {
     ];
     this.revDamp = [0, 0, 0, 0];
     this.revIdx = [0, 0, 0, 0];
+
     this.env = 0;
     this.smoothMaster = 0.6;
+    this.ldrLead = 0; // Smoothed LDR state for lead routing
   }
 
   updateCabFilters(sr) {
@@ -178,7 +223,7 @@ class MarkIVWorklet extends AudioWorkletProcessor {
     this.cabFilters[3].setShelf("high", 5400, -9.0, sr);
   }
 
-  updateFilters(params) {
+  updateFilters(params, ldrLead) {
     const ch = Math.round(params.channel[0]);
     const isL3 = ch === 2;
 
@@ -187,10 +232,19 @@ class MarkIVWorklet extends AudioWorkletProcessor {
     const trebVal = isL3 ? params.l3Treble[0] : params.r1L2Treble[0];
     const presVal = ((isL3 ? params.l3Pres[0] : params.r1L2Pres[0]) + params.presence[0]) * 0.5;
 
-    this.bassFilter.setShelf("low", 110, (bassVal - 5) * 1.6, sampleRate);
-    this.midFilter.setPeaking(620, 1.1, (midVal - 5) * 1.8, sampleRate);
-    this.trebleFilter.setShelf("high", 2400, (trebVal - 5) * 1.7, sampleRate);
-    this.presenceFilter.setShelf("high", 4200, (presVal - 5) * 1.6, sampleRate);
+    // Cathode bypass shelf depth shifts with lead engagement & treble
+    const v1aShelfDb = 2.0 + (trebVal / 10) * 3.5 + ldrLead * 2.0;
+    const v1bShelfDb = 1.5 + ldrLead * 4.5;
+    const v2aShelfDb = ldrLead * 5.0;
+
+    this.v1aCathodeShelf.setShelf("low", 140, v1aShelfDb, sampleRate);
+    this.v1bCathodeShelf.setShelf("low", 180, v1bShelfDb, sampleRate);
+    this.v2aCathodeShelf.setShelf("low", 210, v2aShelfDb, sampleRate);
+
+    this.bassFilter.setShelf("low", 110, (bassVal - 5) * 1.7, sampleRate);
+    this.midFilter.setPeaking(620, 1.1, (midVal - 5) * 1.9, sampleRate);
+    this.trebleFilter.setShelf("high", 2400, (trebVal - 5) * 1.8, sampleRate);
+    this.presenceFilter.setShelf("high", 4200, (presVal - 5) * 1.7, sampleRate);
 
     const eqVals = [
       params.eq80[0],
@@ -233,13 +287,17 @@ class MarkIVWorklet extends AudioWorkletProcessor {
       return true;
     }
 
-    this.updateFilters(parameters);
-
     const ch = Math.round(parameters.channel[0]);
-    const inRhy = 0.5 + (parameters.inputGainRhy[0] / 10) * 1.2;
-    const r1G = 0.7 + (parameters.rhy1Gain[0] / 10) * 3.2;
-    const l2G = 1.3 + (parameters.lead2Gain[0] / 10) * 6.0;
-    const l3G = 1.8 + (parameters.lead3Gain[0] / 10) * 8.5;
+    const targetLdrLead = ch === 0 ? 0.0 : ch === 1 ? 0.65 : 1.0;
+    const ldrCoeff = 1 - Math.exp(-1 / (0.025 * sampleRate));
+    this.ldrLead += ldrCoeff * (targetLdrLead - this.ldrLead);
+
+    this.updateFilters(parameters, this.ldrLead);
+
+    const inRhy = 0.5 + (parameters.inputGainRhy[0] / 10) * 1.3;
+    const r1G = 0.7 + (parameters.rhy1Gain[0] / 10) * 3.0;
+    const l2G = 1.2 + (parameters.lead2Gain[0] / 10) * 5.5;
+    const l3G = 1.6 + (parameters.lead3Gain[0] / 10) * 7.5;
 
     const targetMaster =
       ch === 0
@@ -259,27 +317,34 @@ class MarkIVWorklet extends AudioWorkletProcessor {
     for (let i = 0; i < output.length; i++) {
       this.smoothMaster += masterSmoothCoeff * (targetMaster - this.smoothMaster);
 
-      let s = input[i];
-
-      // Dynamics envelope / punch shaping
-      const absS = Math.abs(s) + ANTI_DENORMAL;
+      // Dynamics envelope follower
+      const absS = Math.abs(input[i]) + ANTI_DENORMAL;
       const coeff = absS > this.env ? 0.005 : 0.0005;
       this.env += coeff * (absS - this.env);
       const dynGain = 1 / (1 + dynAmount * this.env * 2.2);
-      s *= dynGain;
 
-      // Channel gain & triode stages
+      // V1A input triode + cathode shelf + coupling HPF
+      let s = input[i] * dynGain * inRhy;
+      s = this.v1aCathodeShelf.process(s);
+      s = triodeStage(s, 1.1 + r1G * 0.45, 0.14, 0.03);
+      s = this.dcV1a.process(this.v1aCouplingHpf.process(s));
+
+      // Channel / LDR routing through V1B & V2A lead stages
       if (ch === 0) {
-        s = triodeStage(s * inRhy * r1G, 1.25, 0.1);
-      } else if (ch === 1) {
-        s = triodeStage(s * inRhy * l2G, 1.75, 0.14);
-        s = triodeStage(s, 1.35, 0.12);
+        s = s * (0.65 + r1G * 0.55);
       } else {
-        s = triodeStage(s * inRhy * l2G * 0.8, 1.65, 0.14);
-        s = triodeStage(s * l3G * 0.55, 2.1, 0.16);
-      }
+        const stage2Drive = ch === 1 ? (0.8 + l2G * 0.45) : (1.0 + l2G * 0.4 + l3G * 0.35);
+        s = this.v1bCathodeShelf.process(s * stage2Drive);
+        s = triodeStage(s, 1.35 + l2G * 0.35, 0.18, 0.05);
+        s = this.v1bCouplingHpf.process(s);
 
-      s = this.dcBlocker.process(s);
+        if (ch === 2) {
+          s = this.v2aCathodeShelf.process(s * (1.1 + l3G * 0.55));
+          s = triodeStage(s, 1.65 + l3G * 0.4, 0.2, 0.06);
+          s = this.v2aCouplingHpf.process(s);
+        }
+        s = this.dcLead.process(s);
+      }
 
       // Tone stack & presence
       s = this.bassFilter.process(s);
@@ -294,7 +359,7 @@ class MarkIVWorklet extends AudioWorkletProcessor {
         }
       }
 
-      // Reverb & smoothed channel master + solo + optional 4x12 V30 cab + output level
+      // Reverb, master, solo, optional 4x12 V30 cab, output level
       const wetRev = this.processReverb(s, revAmount);
       let outSample = (s * this.smoothMaster + wetRev) * soloBoost;
       if (cabOn) {
