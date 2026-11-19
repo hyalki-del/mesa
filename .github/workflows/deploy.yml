@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  build-and-deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -29,10 +29,33 @@ jobs:
 
       - name: Stage web bundle
         run: |
+          rm -rf dist
           mkdir -p dist
-          cp -r public/* dist/
-          mkdir -p dist/src
-          cp -r src/* dist/src/
+
+          if [ -d "public" ] && [ -n "$(ls -A public 2>/dev/null)" ]; then
+            cp -r public/. dist/
+          fi
+
+          if [ -f "index.html" ] && [ ! -f "dist/index.html" ]; then
+            cp index.html dist/
+          fi
+
+          if [ -f "styles.css" ] && [ ! -f "dist/styles.css" ]; then
+            cp styles.css dist/
+          fi
+
+          if [ -d "src" ] && [ -n "$(ls -A src 2>/dev/null)" ]; then
+            mkdir -p dist/src
+            cp -r src/. dist/src/
+          fi
+
+          if [ ! -f "dist/index.html" ]; then
+            echo "Error: index.html not found in public/ or repository root."
+            exit 1
+          fi
+
+          echo "Staged files in dist/:"
+          find dist -maxdepth 3 -ls
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
